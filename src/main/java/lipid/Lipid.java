@@ -2,11 +2,14 @@ package lipid;
 
 import java.util.Objects;
 
+/**
+ * Represents a lipid compound
+ */
 public class Lipid {
     private final int compoundId;
     private final String name;
     private final String formula;
-    private final String lipidType; // !! OPTIONAL TODO -> TRANSFORM INTO AN ENUMERATION
+    private final LipidType lipidType; // Transformed into an enumeration
     private final int carbonCount;
     private final int doubleBondsCount;
 
@@ -19,7 +22,7 @@ public class Lipid {
      * @param carbonCount
      * @param doubleBondCount
      */
-    public Lipid(int compoundId, String name, String formula, String lipidType, int carbonCount, int doubleBondCount) {
+    public Lipid(int compoundId, String name, String formula, LipidType lipidType, int carbonCount, int doubleBondCount) {
         this.compoundId = compoundId;
         this.name = name;
         this.formula = formula;
@@ -40,15 +43,15 @@ public class Lipid {
         return formula;
     }
 
-    public String getLipidType() {
-        return this.lipidType;
+    public LipidType getLipidType() {
+        return lipidType;
     }
 
-    public int getCarbonCount() {
+    public int getCarbons() {
         return carbonCount;
     }
 
-    public int getDoubleBondsCount() {
+    public int getDoubleBonds() {
         return doubleBondsCount;
     }
 
