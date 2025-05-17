@@ -1,27 +1,316 @@
+package lipid
 
-package lipid;
+unit lipid.LipidScoreUnit
 
-unit LipidScoreUnit;
+import lipid.Annotation
+import lipid.Lipid
+import lipid.LipidType
+import static lipid.LipidUtils.compareLipidTypes
+import lipid.LipidUtils
+import static lipid.LipidUtils.violatesCarbonElutionOrder
 
-// TODO Include here rules and queries to fulfill the practice requirements
 
-
-// This is one example of rules that only prints the factorial combination of all pairs eliminating the A-A combination.
-// !! TODO This rule does not include the lipid type, you shall add it.
-// !! TODO Rule that states that the same lipid type with the same number of double bonds and a higher number of carbons should have a higher RT
-// !! TODO
-rule "Score 1 for lipid pair with increasing RT and carbon count"
+// === ADDUCT DETECTION RULES ====
+rule "Detect [M+H]+ via presence of [M+Na]+"
 when
-    $a1 : /annotations [$rt1 : rtMin, $carbonCount1 : lipid.getCarbonCount(), $doubleBondCount : lipid.getDoubleBondsCount()]
-    $a2 : /annotations [this!= $a1, lipid.getDoubleBondsCount() == $doubleBondCount,
-    rtMin > $rt1, lipid.getCarbonCount() > $carbonCount1]
+    $a: Annotation( adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz:mz, $peaks: groupedSignals ) from annotations
+    Peak ( $otherMz: mz) from $peaks
+    // Second peak 21.98Da above base m/z
+    // Simulate +-0.1Da tolerance
+    Peak (mz > $mz, (mz - $mz) > 21.88, (mz - $mz ) < 22.08 ) from $peaks
 then
-    // in this case, the only change is the addition of the score, but the fact does not change so we do not break the principle of refractoriness
-    $a1.addScore(1);
-    $a2.addScore(1);
-    // !! TODO ONLY FOR DEBUGGING
-    System.out.println("Scored 1 for annotations: " + $a1 + " and " + $a2);
+    $a.setAdduct("[M+H]+");
+    update($a);
+end
+
+rule "Detect [M+Na]+"
+when
+    $a: Annotation( adduct == null, ionizationMode == IoniationMode.POSITIVE , $mz:mz, $peaks: groupedSignals) from annotations
+    Peak((mz - $mz) < -21.88, (mz - $mz) > -22.08) from $peaks
+then
+    $a.setAdduct("[M+Na]+");
+    update($a);
+end
+
+rule "Detect [M+K]+"
+when
+    $a: Annotation( adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz:mz, $peaks: groupedSignals ) from annotations
+    Peak((mz - $mz) > 37.9, (mz - $mz) < 38.1) from $peaks
+then
+    $a.setAdduct("[M+K]+");
+    update($a);
+end
+
+rule "Detect [M+NH4]+"
+when
+    $a: Annotation( adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz:mz, $peaks: groupedSignals ) from annotations
+    Peak((mz - $mz) > 17.0, (mz - $mz) < 17.2) from $peaks
+then
+    $a.setAdduct("[M+NH4]+");
+    update($a);
+end
+
+rule "Detect [M+H-H2O]+"
+when
+    $a: Annotation(adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz: mz, $peaks: groupedSignals) from annotations
+    $p: Peak($peakMz: mz) from $peaks
+    eval(($peakMz - $mz) > -18.03 && ($peakMz - $mz) < -17.99)
+then
+    $a.setAdduct("[M+H-H2O]+");
+    update($a);
 end
 
 
-// !! TODO NEXT RULE: Negative evidence. If the RT follows the opposite order than the previous one, then the addScore should be -1.
+rule "Detect [M+2H]2+"
+when
+    $a: Annotation(adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz: mz, $peaks: groupedSignals) from annotations
+    $p: Peak($pmz: mz) from $peaks
+    eval((2.0 * $mz - $peakMz) > -0.02 && (2.0 * $mz - $peakMz) < 0.02)
+then
+    $a.setAdduct("[M+2H]2+");
+    update($a);
+end
+
+
+rule "Detect [M-H]- (negative mode) "
+when
+    $a: Annotation ( adduct == null, ionizationMode == IoniationMode.NEGATIVE, $mz:mz, $peaks: groupedSignals ) from annotations
+    Peak((mz - $mz) > 0.999, (mz - $mz) < 1.01) from $peaks
+then
+    $a.setAdduct("[M-H]-");
+    update($a);
+end
+
+rule "Detect [2M+Na]+"
+when
+    $a: Annotation( adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz:mz, $peaks: groupedSignals ) from annotations
+    Peak((mz - 2 * $mz) > 21.9, (mz - 2 * $mz) < 22.1) from $peaks
+then
+    $a.setAdduct("[2M+Na]+");
+    update($a);
+end
+
+rule "Detect [2M+H]+"
+when
+    $a: Annotation( adduct == null, ionizationMode == IoniationMode.POSITIVE, $mz:mz, $peaks: groupedSignals ) from annotations
+    Peak((mz - 2 * $mz) > 1.0, (mz - 2 * $mz) < 1.01) from $peaks
+then
+    $a.setAdduct("[2M+H]+");
+    update($a);
+end
+
+rule "Fallback to [M+H]+"
+when
+    $a: Annotation( adduct == null )
+then
+    $a.setAdduct("[M+H]+");
+end
+
+
+
+// POSITIVE SCORES
+rule "Score +1: RT increases with carbon number (same type and DB)"
+no-loop true
+salience 100
+when
+    $a1: /annotations[$compoundId1 : lipid.compoundId, $lipid1: lipid, $rt1: rtMin]
+    $a2: /annotations[lipid.compoundId > $compoundId1, $lipid2: lipid, $rt2: rtMin]
+    eval(
+        $lipid1.getCarbons() > $lipid2.getCarbons() &&
+        $lipid1.getDoubleBonds() == $lipid2.getDoubleBonds() &&
+        $lipid1.getLipidType() == $lipid2.getLipidType() &&
+        $rt1 > $rt2
+    )
+then
+    $a1.winComparison();
+    $a2.loseComparison();
+    $a1.setHasBeenScored(true);
+    $a2.setHasBeenScored(true);
+    update($a1);
+    update($a2);
+end
+
+rule "Score +1: RT increases with fewer double bonds (same type and C)"
+no-loop true
+salience 90
+when
+    $a1: /annotations[$compoundId1 : lipid.compoundId, $lipid1: lipid, $rt1: rtMin]
+    $a2: /annotations[lipid.compoundId > $compoundId1, $lipid2: lipid, $rt2: rtMin]
+    eval(
+        $lipid1.getCarbons() == $lipid2.getCarbons() &&
+        $lipid1.getLipidType() == $lipid2.getLipidType() &&
+        $lipid1.getDoubleBonds() > $lipid2.getDoubleBonds() &&
+        $rt1 < $rt2
+    )
+then
+    $a1.winComparison();
+    $a2.loseComparison();
+    $a1.setHasBeenScored(true);
+    $a2.setHasBeenScored(true);
+    update($a1);
+    update($a2);
+end
+
+
+rule "Score +1: RT increases with fewer double bonds (same type and C) - reverse"
+no-loop true
+salience 89
+when
+    $a1: /annotations[$compoundId1 : lipid.compoundId, $lipid1: lipid, $rt1: rtMin]
+    $a2: /annotations[lipid.compoundId > $compoundId1, $lipid2: lipid, $rt2: rtMin]
+    eval(
+        $lipid1.getCarbons() == $lipid2.getCarbons() &&
+        $lipid1.getLipidType().equals($lipid2.getLipidType()) &&
+        $lipid2.getDoubleBonds() > $lipid1.getDoubleBonds() &&
+        $rt2 < $rt1
+    )
+then
+    $a2.winComparison();
+    $a1.loseComparison();
+    $a1.setHasBeenScored(true);
+    $a2.setHasBeenScored(true);
+    update($a1);
+    update($a2);
+end
+
+rule "Score 0: RT not consistent with double bond count"
+no-loop true
+salience 80
+when
+    $a1: /annotations[$compoundId1 : lipid.compoundId, $lipid1: lipid, $rt1: rtMin]
+    $a2: /annotations[lipid.compoundId > $compoundId1, $lipid2: lipid, $rt2: rtMin]
+    eval(
+        $lipid1.getCarbons() == $lipid2.getCarbons() &&
+        $lipid1.getLipidType().equals($lipid2.getLipidType()) &&
+        !(
+            ($lipid1.getDoubleBonds() > $lipid2.getDoubleBonds() && $rt1 < $rt2) ||
+            ($lipid2.getDoubleBonds() > $lipid1.getDoubleBonds() && $rt2 < $rt1)
+        )
+    )
+then
+    $a1.loseComparison();
+    $a2.loseComparison();
+    $a1.setHasBeenScored(true);
+    $a2.setHasBeenScored(true);
+    update($a1);
+    update($a2);
+end
+
+rule "Score +1: RT increases with lipid type elution order (same DB and C)"
+no-loop true
+salience 70
+when
+    $a1: /annotations[$compoundId1 : lipid.compoundId, $lipid1: lipid, $rt1: rtMin]
+    $a2: /annotations[lipid.compoundId > $compoundId1, $lipid2: lipid, $rt2: rtMin]
+    eval(
+        $lipid1.getCarbons() == $lipid2.getCarbons()
+        && $lipid1.getDoubleBonds() == $lipid2.getDoubleBonds()
+    )
+    eval(
+        LipidUtils.elutesAfter($lipid1.getLipidType(), $lipid2.getLipidType())
+    )
+    eval($rt1 > $rt2)
+then
+    $a1.winComparison();
+    $a2.loseComparison();
+    $a1.setHasBeenScored(true);
+    $a2.setHasBeenScored(true);
+    update($a1);
+    update($a2);
+end
+
+
+
+// NEGATIVE SCORES
+
+// Penalize a1 if it elutes too early with higher type
+rule "Negative score - a1 elutes too early with higher type"
+no-loop true
+salience 10
+when
+    $a1 : /annotations[$compoundId1 : lipid.compoundId, $lipid1 : lipid, $rt1 : rtMin]
+    $a2 : /annotations[
+        lipid.compoundId != $compoundId1,
+        $lipid2 : lipid,
+        $rt2 : rtMin,
+        eval(
+            $lipid1.getCarbons() == $lipid2.getCarbons() &&
+            $lipid1.getDoubleBonds() == $lipid2.getDoubleBonds() &&
+            $rt1 < $rt2 &&
+            LipidUtils.elutesAfter($lipid1.getLipidType(), $lipid2.getLipidType())
+        )
+    ]
+then
+    $a1.addScore(-1);
+    $a1.setHasBeenScored(true);
+    update($a1);
+end
+
+rule "Negative score - a2 elutes too early with higher type"
+no-loop true
+salience 10
+when
+    $a1 : /annotations[$compoundId1 : lipid.compoundId, $lipid1 : lipid, $rt1 : rtMin]
+    $a2 : /annotations[
+        lipid.compoundId != $compoundId1,
+        $lipid2 : lipid,
+        $rt2 : rtMin,
+        eval(
+            $lipid1.getCarbons() == $lipid2.getCarbons() &&
+            $lipid1.getDoubleBonds() == $lipid2.getDoubleBonds() &&
+            $rt2 < $rt1 &&
+            LipidUtils.elutesAfter($lipid2.getLipidType(), $lipid1.getLipidType())
+        )
+    ]
+then
+    $a2.addScore(-1);
+    $a2.setHasBeenScored(true);
+    update($a2);
+end
+
+rule "Fallback - Any unmatched annotation gets score 0"
+no-loop true
+salience -10
+when
+    $a : /annotations( eval(score == 0 ))
+then
+    // Do nothing if already set
+end
+
+rule "Negative score - RT too early with more carbons"
+no-loop true
+salience 10
+when
+    $a1 : /annotations[
+        $compoundId1 : lipid.compoundId,
+        $lipid1 : lipid,
+        $rt1 : rtMin
+    ]
+    $a2 : /annotations[
+        lipid.compoundId != $compoundId1,
+        $lipid2 : lipid,
+        $rt2 : rtMin,
+        eval(
+            $lipid1.getLipidType() == $lipid2.getLipidType() &&
+            $lipid1.getDoubleBonds() == $lipid2.getDoubleBonds() &&
+            $lipid2.getCarbons() > $lipid1.getCarbons() &&
+            $rt2 < $rt1
+        )
+    ]
+then
+    $a2.addScore(-1);
+    $a2.setHasBeenScored(true);
+    update($a2);
+end
+
+
+rule "Assign fallback score"
+no-loop true
+salience -15
+when
+    $a : Annotation(score == 0, hasBeenScored == false)
+then
+    $a.addScore(0);
+    $a.setHasBeenScored(true);
+    update($a);
+end
